@@ -22,7 +22,7 @@ The signer stays hidden, because the leaf certificate and its key are private wi
 
 **Batching is one proof per image.** All images share one verification key.
 - [tools/batch_prove.py](tools/batch_prove.py) (holder side) proves every image in a folder.
-- [tools/batch_verify.py](tools/batch_verify.py) (verifier side) checks each published image and prints a table:
+- [tools/batch_verify.py](tools/batch_verify.py) (verifier side) checks each published image and prints a table. It verifies every proof with `EXPECTED_VK`, the key the verifier built from the circuit itself; a key shipped with the proofs is never trusted:
 
 ```
 image            trusted CA   AI in actions  detail
@@ -48,6 +48,7 @@ The demo also runs these attacks, and all of them are rejected:
 | Reuse a clean image's proof for an AI image | proof is for a different image |
 | Flip the public `has_ai` bit from 1 to 0 | proof invalid |
 | Prove the rogue image under the look-alike rogue CA | proof is for a different CA |
+| "Prove" the unsigned `plain.jpg` trusted and AI-free with [a decoy circuit](circuits/decoy_trusted_ca_ai_flag/src/main.nr) that checks nothing | verification key is not the trusted circuit's (or, without its own key, proof invalid) |
 
 **What the circuit adds on top of `no_ai_actions`:**
 1. ES256 check that the CA signed the leaf certificate (`sha256_var` over the certificate's signed portion).

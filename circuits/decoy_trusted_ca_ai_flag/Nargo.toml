@@ -1,0 +1,6 @@
+[package]
+name = "decoy_trusted_ca_ai_flag"
+type = "bin"
+authors = [""]
+
+[dependencies]
