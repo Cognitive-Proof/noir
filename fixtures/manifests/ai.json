@@ -1,0 +1,28 @@
+{
+  "alg": "es256",
+  "private_key": "../certs/signer.key",
+  "sign_cert": "../certs/chain.pem",
+  "claim_generator_info": [{"name": "noir-c2pa-fixture", "version": "0.1.0"}],
+  "title": "ai-image.jpg",
+  "assertions": [
+    {
+      "label": "c2pa.actions.v2",
+      "data": {
+        "actions": [
+          {"action": "c2pa.created", "digitalSourceType": "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"},
+          {"action": "c2pa.color_adjustments", "softwareAgent": {"name": "ImageGen 3"}}
+        ]
+      }
+    },
+    {
+      "label": "stds.exif",
+      "data": {
+        "@context": {"exif": "http://ns.adobe.com/exif/1.0/", "dc": "http://purl.org/dc/elements/1.1/"},
+        "exif:GPSLatitude": "39,21.102N",
+        "exif:GPSLongitude": "74,26.5737W",
+        "exif:DateTimeOriginal": "2026-10-20T14:32:11Z",
+        "dc:creator": ["Jane Q. Photographer"]
+      }
+    }
+  ]
+}

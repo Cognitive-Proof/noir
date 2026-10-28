@@ -1,0 +1,11 @@
+[req]
+distinguished_name=dn
+prompt=no
+x509_extensions=v3_ca
+[dn]
+CN=Noir-C2PA Test Root CA
+O=Noir-C2PA Test
+[v3_ca]
+basicConstraints=critical,CA:TRUE
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash

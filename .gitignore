@@ -1,0 +1,8 @@
+.venv/
+out/
+circuits/*/target/
+circuits/*/*.toml
+!circuits/*/Nargo.toml
+fixtures/certs/*.srl
+fixtures/certs/*.csr
+__pycache__/
