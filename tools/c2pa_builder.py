@@ -79,9 +79,11 @@ def _insert_at(jpeg: bytes) -> int:
 
 
 def sign_jpeg(jpeg: bytes, created: list, gathered: list, key_path: str, chain_path: str,
-              title: str, generator: dict, insert_at: int = None) -> bytes:
+              title: str, generator: dict, insert_at: int = None,
+              ingredient_manifests: list = ()) -> bytes:
     """Embed a signed manifest made of `created` + `gathered` Assertions (plus a
-    c2pa.hash.data that this function adds) into `jpeg`."""
+    c2pa.hash.data that this function adds) into `jpeg`. `ingredient_manifests`
+    (whole manifest superboxes) are kept in the store ahead of the new one."""
     key = serialization.load_pem_private_key(open(key_path, "rb").read(), None)
     chain = [c.public_bytes(serialization.Encoding.DER)
              for c in x509.load_pem_x509_certificates(open(chain_path, "rb").read())]
@@ -117,7 +119,7 @@ def sign_jpeg(jpeg: bytes, created: list, gathered: list, key_path: str, chain_p
             superbox(TYPE_CLAIM, "c2pa.claim.v2", [box(b"cbor", claim)]),
             superbox(TYPE_SIGNATURE, "c2pa.signature", [box(b"cbor", cose)]),
         ])
-        segments = _app11_segments(superbox(TYPE_STORE, "c2pa", [manifest]))
+        segments = _app11_segments(superbox(TYPE_STORE, "c2pa", [*ingredient_manifests, manifest]))
         if len(segments) == excl_len:
             return jpeg[:insert_at] + segments + jpeg[insert_at:]
         excl_len = len(segments)

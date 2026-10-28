@@ -38,12 +38,15 @@ c2pa.signals.ingredient[__n] / c2pa.signals.ancestors[__n]   #2530 summaries
 **Flow**
 1. **Pruner, proving.** [tools/prune_prove.py](tools/prune_prove.py) makes one [`pruned_manifest_no_ai`](circuits/pruned_manifest_no_ai/src/main.nr) proof per ingredient. The AI-generated ingredient can't be proven.
 2. **Pruner, building.** [tools/prune_build.py](tools/prune_build.py) builds and signs the final manifest. The ingredient manifests are left out entirely. c2pa-rs can't write #2530 fields yet, so [tools/c2pa_builder.py](tools/c2pa_builder.py) writes the manifest in the same layout c2pa-rs uses; c2patool validates it as `Valid`.
-3. **Verifier.** [tools/prune_verify.py](tools/prune_verify.py) does standard C2PA validation of the final manifest, then binds it to the bytes it reads: the file must hold exactly one C2PA Manifest Store, its active manifest must be the one c2patool reports (same label, same signing certificate), and the verifier re-checks the claim signature itself. The list of ingredients comes from that signed claim. For each pruned ingredient, it checks:
-   - that the ingredient assertion is the one the claim signed, and the `relatedAssertions` hashes;
-   - that the proof's H equals `prunedManifest.hash`;
-   - that the verification key is the trusted circuit's;
-   - that the certificate's key equals K, and the certificate chains to the trusted CA and is in date;
-   - that `bb verify` passes.
+3. **Verifier.** [tools/prune_verify.py](tools/prune_verify.py) does standard C2PA validation of the final manifest, then binds it to the bytes it reads: the file must hold exactly one C2PA Manifest Store, its active manifest must be the one c2patool reports (same label, same signing certificate), and the verifier re-checks the claim signature itself. The list of ingredients comes from that signed claim, and each is one of three kinds:
+   - **kept** (manifest still in the store, `activeManifest`): needs no proof. Its actions are read in the clear and must declare no AI `digitalSourceType`; it must have no ingredients of its own (the verifier doesn't follow nested history).
+   - **no provenance** (no manifest at all): reported, not covered, doesn't fail the result.
+   - **pruned** (`prunedManifest`): must carry a proof. The verifier checks:
+     - that the ingredient assertion is the one the claim signed, and the `relatedAssertions` hashes;
+     - that the proof's H equals `prunedManifest.hash`;
+     - that the verification key is the trusted circuit's;
+     - that the certificate's key equals K, chains to the trusted CA, is in date, and meets the C2PA signing-credential profile as c2pa-rs enforces it (v3, not a CA, `digitalSignature` key usage, an accepted extended key usage such as email protection, document signing or C2PA signing, an allowed algorithm and curve, no unrecognised critical extension);
+     - that `bb verify` passes.
 4. **Later disclosure.** `--reveal ingredient.jpg` hashes a disclosed manifest and names the pruned entry it matches.
 
 The demo also plays a **dishonest pruner**. The pruner signs the final manifest, so it can write anything into it; the proofs are what stop this. Every attempt below is rejected:
@@ -56,6 +59,8 @@ The demo also plays a **dishonest pruner**. The pruner signs the final manifest,
 | Leave out ingredient 1's proof | no zero-knowledge proof attached |
 | Leave out a proof, and hide a non-C2PA-typed copy of an honest store ahead of the signed one (c2patool still reports `Valid`) | the verifier reads only the store c2patool validated |
 | Add a second C2PA store | rejected: more than one manifest store |
+| Attach a CA-issued certificate for the proven key that is only a TLS server certificate | not a C2PA signing credential |
+| Keep (don't prune) an ingredient whose manifest declares AI, so it needs no proof | kept ingredient declares AI |
 | Flip a bit in the final manifest | standard C2PA validation (signature / hashed URIs) |
 | Prove a manifest whose stored actions declare AI, using the original clean actions as the witness ([test](tools/test_tampered_actions.py)) | the circuit: the witness must be the stored actions box |
 
@@ -72,6 +77,8 @@ The demo also plays a **dishonest pruner**. The pruner signs the final manifest,
 **Limitations**
 - **No ancestors allowed.** Each ingredient must have no ingredients of its own. A nested tree would need each proof to publish its children's hashes.
 - **Fixed layouts only.** The COSE layout must be c2pa-rs's: protected header and pad both 256–65535 bytes, no timestamp in the unprotected header. The manifest must be ≤ 56 KB.
+- **Signing-credential profile.** The verifier ports c2pa-rs's end-entity checks, except one: certificates with issuer or subject unique IDs, which c2pa-rs rejects, aren't detected (Python's `cryptography` doesn't expose them). Revocation and a real trust list are out of scope; the CA is trusted directly.
+- **Kept ingredients aren't followed.** A kept ingredient whose own manifest has ingredients fails closed rather than being checked recursively.
 - **Pinned verification key.** The verifier pins the verification key it built from the circuit itself (`EXPECTED_VK`). In a real deployment it would come from an audited build matching `statementSpec`.
 - **Proposed spec.** `c2pa.zero-knowledge-proof.ingredient`, `c2pa.pruned-manifest-hash` and the signals trait mapping are illustrative, following open proposals #318 and #2530.
 - **Expected c2patool warnings.** c2patool has no #2530 support and reports `signingCredential.untrusted` (test certificates). It doesn't know `prunedManifest`, so it neither checks nor rejects it.

@@ -9,8 +9,14 @@ For each ingredient the final manifest gets (c2pa-org/specs-core#2530):
   c2pa.signals.ancestors[__n]      its (empty) ancestors' signals
 The ingredient manifests themselves are not included.
 
+Optionally, ingredients that are not pruned:
+  --ordinary SIGNED.jpg       manifest kept in the store; the ingredient has
+                              activeManifest + claimSignature (repeatable)
+  --no-provenance IMAGE.jpg   an ingredient with no C2PA manifest (repeatable)
+
 usage: prune_build.py OUT.jpg PROOFS_DIR INGREDIENT.jpg [INGREDIENT.jpg ...]
-         [--attack swap-proofs|wrong-cert|own-vk|drop-proof|decoy-store]
+         [--ordinary SIGNED.jpg] [--no-provenance IMAGE.jpg]
+         [--attack swap-proofs|wrong-cert|own-vk|drop-proof|decoy-store|tls-cert]
          [--decoy-vk VK] [--decoy-store HONEST_FINAL.jpg]
 
 --attack builds a final manifest the way a dishonest pruner might; it is
@@ -18,12 +24,18 @@ still validly signed, and the verifier must catch it. own-vk needs
 --decoy-vk, a verification key for some other circuit. decoy-store drops
 ingredient 1's proof and hides a retyped copy of an honest final store
 (--decoy-store) ahead of the signed one, inside the signed image bytes.
+tls-cert attaches, for ingredient 1, a CA-issued certificate for the proven
+key that is only a TLS server certificate (not a C2PA signing credential).
 """
+import datetime
 import hashlib
 import json
 import os
 import subprocess
 import sys
+import uuid
+
+import cbor2
 
 from PIL import Image
 
@@ -31,9 +43,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from c2pa_builder import Assertion, sign_jpeg  # noqa: E402
 from c2pa_witness import extract  # noqa: E402
 from inject_store import copied_store  # noqa: E402
+from jumbf import jumbf_from_jpeg, parse_boxes  # noqa: E402
 from cryptography import x509  # noqa: E402
-from cryptography.hazmat.primitives import serialization  # noqa: E402
-from cryptography.x509.oid import NameOID  # noqa: E402
+from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CIRCUIT_SRC = "circuits/pruned_manifest_no_ai/src/main.nr"
@@ -54,6 +67,25 @@ NON_GENAI_EDITS = {"c2pa.color_adjustments", "c2pa.cropped", "c2pa.resized", "c2
 
 def tool_version(cmd):
     return subprocess.run(cmd, capture_output=True, text=True).stdout.strip().splitlines()[0]
+
+
+def tls_certificate(public_key):
+    """A TLS-server-only certificate for `public_key`, issued by the trusted CA."""
+    ca_cert = x509.load_pem_x509_certificate(open("fixtures/certs/ca.pem", "rb").read())
+    ca_key = serialization.load_pem_private_key(open("fixtures/certs/ca.key", "rb").read(), None)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return (x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "tls.example")]))
+            .issuer_name(ca_cert.subject)
+            .public_key(public_key)
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=365))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.KeyUsage(True, False, True, False, False, False, False, False, False),
+                           critical=True)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(ca_key, hashes.SHA256()))
 
 
 def suffix(i):
@@ -80,10 +112,11 @@ def signals(actions):
 
 
 argv = sys.argv[1:]
-options = {}
-for name in ("--attack", "--decoy-vk", "--decoy-store"):
-    if name in argv:
+options, ordinary, no_provenance = {}, [], []
+for name in ("--attack", "--decoy-vk", "--decoy-store", "--ordinary", "--no-provenance"):
+    while name in argv:
         i = argv.index(name)
+        {"--ordinary": ordinary, "--no-provenance": no_provenance}.get(name, []).append(argv[i + 1])
         options[name] = argv[i + 1]
         del argv[i:i + 2]
 attack, decoy_vk = options.get("--attack"), options.get("--decoy-vk")
@@ -118,6 +151,8 @@ for i, (path, name) in enumerate(zip(ingredient_paths, names)):
     if attack == "wrong-cert" and i == 0:  # claim a different (trusted) signer
         other = open("fixtures/certs/signer-editor.pem", "rb").read()
         cert_der = x509.load_pem_x509_certificate(other).public_bytes(serialization.Encoding.DER)
+    if attack == "tls-cert" and i == 0:  # right key, right CA, wrong kind of certificate
+        cert_der = tls_certificate(cert.public_key()).public_bytes(serialization.Encoding.DER)
     proof_vk = vk
     if attack == "own-vk" and i == 0:  # verification key for some other circuit
         proof_vk = open(decoy_vk, "rb").read()
@@ -176,14 +211,46 @@ for i, (path, name) in enumerate(zip(ingredient_paths, names)):
     ingredient_refs.append(ingredient.ref())
     print(f"{name:8} pruned  H={f['manifest_hash'].hex()[:16]}…  signer={cert.subject.rfc4514_string()}")
 
+# --- ingredients that are not pruned ------------------------------------------
+kept_manifests = []
+for path in ordinary:  # manifest kept in the store, referenced the ordinary way
+    j = jumbf_from_jpeg(open(path, "rb").read())
+    m = parse_boxes(j, 0, len(j))[0].children[-1]
+    sig = next(c for c in m.children if c.label == "c2pa.signature")
+    claim = cbor2.loads(next(c for c in m.children if c.label == "c2pa.claim.v2").children[-1].payload)
+    kept_manifests.append(j[m.offset:m.end])
+    s = suffix(len(created))
+    ingredient = Assertion(f"c2pa.ingredient.v3{s}", {
+        "dc:title": claim.get("dc:title", os.path.basename(path)),
+        "dc:format": "image/jpeg",
+        "relationship": "componentOf",
+        "instanceID": claim["instanceID"],
+        "activeManifest": {"url": f"self#jumbf=/c2pa/{m.label}", "alg": "sha256",
+                           "hash": hashlib.sha256(j[m.offset + 8:m.end]).digest()},
+        "claimSignature": {"url": f"self#jumbf=/c2pa/{m.label}/c2pa.signature", "alg": "sha256",
+                           "hash": hashlib.sha256(j[sig.offset + 8:sig.end]).digest()},
+        "validationResults": {"activeManifest": validation_results(path)},
+    })
+    created.append(ingredient)
+    ingredient_refs.append(ingredient.ref())
+    print(f"{os.path.basename(path)[:-4]:8} kept    (manifest {m.label} stays in the store)")
+for path in no_provenance:  # no C2PA manifest at all
+    s = suffix(len(created))
+    ingredient = Assertion(f"c2pa.ingredient.v3{s}", {
+        "dc:title": os.path.basename(path), "dc:format": "image/jpeg",
+        "relationship": "componentOf", "instanceID": f"xmp:iid:{uuid.uuid4()}",
+    })
+    created.append(ingredient)
+    ingredient_refs.append(ingredient.ref())
+    print(f"{os.path.basename(path)[:-4]:8} no provenance")
+
 actions = Assertion("c2pa.actions.v2", {"actions": [
     {"action": "c2pa.created", "digitalSourceType": DST + "compositeCapture"},
     *[{"action": "c2pa.placed", "parameters": {"ingredients": [ref]}} for ref in ingredient_refs],
 ]})
 
 # the composite: ingredient pixels side by side
-srcs = [Image.open(os.path.join(os.path.dirname(os.path.dirname(p)), "src", os.path.basename(p)))
-        for p in ingredient_paths]
+srcs = [Image.open(p).convert("RGB") for p in ingredient_paths + ordinary + no_provenance]
 canvas = Image.new("RGB", (sum(im.width for im in srcs), max(im.height for im in srcs)))
 x = 0
 for im in srcs:
@@ -201,7 +268,7 @@ if attack == "decoy-store":  # retyped honest store first; the signed store goes
     jpeg, insert_at = jpeg[:at] + decoy + jpeg[at:], at + len(decoy)
 jpeg = sign_jpeg(jpeg, [actions] + created, gathered,
                  f"{EDITOR}.key", f"{EDITOR}.chain.pem", os.path.basename(out_path),
-                 {"name": "noir-c2pa-prune", "version": "0.1.0"}, insert_at)
+                 {"name": "noir-c2pa-prune", "version": "0.1.0"}, insert_at, kept_manifests)
 os.remove(unsigned)
 open(out_path, "wb").write(jpeg)
 print(f"-> {out_path} ({len(jpeg)} bytes, {len(ingredient_paths)} pruned ingredients"

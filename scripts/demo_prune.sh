@@ -60,6 +60,21 @@ attack drop-proof "no zero-knowledge proof attached"
 # the signed one: the verifier must read the store c2patool validated
 attack decoy-store "no zero-knowledge proof attached" --decoy-store $OUT/final.jpg
 
+attack tls-cert "not a C2PA signing credential: no extended key usage accepted"
+
+echo "== ingredients that are not pruned"
+# a kept (manifest still in the store) clean ingredient and one with no
+# provenance: both are reported, neither needs a proof
+$PY tools/prune_build.py $OUT/mixed.jpg $OUT/proofs $INGREDIENTS \
+  --ordinary fixtures/signed-camera.jpg --no-provenance fixtures/source.jpg >/dev/null
+out=$($PY tools/prune_verify.py $OUT/mixed.jpg $CA $VK) || { echo "UNEXPECTED: mixed rejected"; echo "$out"; exit 1; }
+grep -E "kept \(manifest present\)|no provenance|ALL PRUNED" <<<"$out" | sed 's/^/   /'
+# a kept ingredient that declares AI still fails: not pruning it can't hide it
+$PY tools/prune_build.py $OUT/kept-ai.jpg $OUT/proofs $INGREDIENTS --ordinary $ING/ai-ingr.jpg >/dev/null
+if out=$($PY tools/prune_verify.py $OUT/kept-ai.jpg $CA $VK); then echo "UNEXPECTED: kept AI accepted"; exit 1; fi
+grep -q "kept ingredient declares AI" <<<"$out" || { echo "$out"; exit 1; }
+echo "   kept AI ingredient: rejected (kept ingredient declares AI)"
+
 echo "== a second C2PA store in the file"
 $PY tools/inject_store.py $OUT/final.jpg $OUT/attack-drop-proof.jpg $OUT/two-stores.jpg
 if $PY tools/prune_verify.py $OUT/two-stores.jpg $CA $VK >/dev/null; then echo "UNEXPECTED"; exit 1; fi
