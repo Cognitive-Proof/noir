@@ -1,0 +1,7 @@
+[package]
+name = "pruned_manifest_no_ai"
+type = "bin"
+authors = [""]
+
+[dependencies]
+sha256 = { tag = "v0.3.0", git = "https://github.com/noir-lang/sha256" }

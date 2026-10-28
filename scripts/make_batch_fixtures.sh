@@ -16,15 +16,7 @@ fi
 
 # leaf signers: name:issuing-CA
 for spec in camera-a:ca camera-b:ca ai-tool:ca rogue:rogue-ca; do
-  name=${spec%%:*}; ca=${spec##*:}; base=$CERTS/signer-$name
-  [ -f $base.pem ] && continue
-  openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt -out $base.key
-  # LibreSSL ignores -subj with prompt=no, so rename the CN in a copy of the config
-  sed "s/^CN=.*/CN=Signer $name/" $CERTS/signer.cnf > $base.cnf
-  openssl req -new -key $base.key -config $base.cnf \
-    | openssl x509 -req -CA $CERTS/$ca.pem -CAkey $CERTS/$ca.key -CAcreateserial \
-        -out $base.pem -days 1825 -sha256 -extfile $base.cnf -extensions v3_leaf 2>/dev/null
-  cat $base.pem $CERTS/$ca.pem > $base.chain.pem
+  scripts/make_signer.sh ${spec%%:*} ${spec##*:}
 done
 
 rm -rf $BATCH && mkdir -p $BATCH/images

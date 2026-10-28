@@ -20,6 +20,9 @@ MAX_TBS = 2048
 MAX_ACTIONS = 512
 MAX_HASH_DATA = 256
 MAX_TBS_CERT = 1024
+# pruned_manifest_no_ai uses larger Sig_structure limits and the whole manifest
+MAX_MANIFEST = 57344
+MAX_TBS_PRUNED = 2112
 
 P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 # SubjectPublicKeyInfo header for an uncompressed P-256 key
@@ -57,6 +60,10 @@ def extract(signed_path: str) -> dict:
     except AssertionError as e:
         raise NoManifest(str(e)) from e
     root = parse_boxes(jumbf, 0, len(jumbf))
+    # active manifest = last manifest in the store; its superbox contents are
+    # what #2530's prunedManifest.hash commits to
+    active = root[0].children[-1]
+    manifest = jumbf[active.offset + 8:active.end]
 
     def assertion_body(label):
         """Bytes the claim's hashed-uri covers: superbox minus its 8-byte header."""
@@ -98,6 +105,10 @@ def extract(signed_path: str) -> dict:
 
     return {
         "published": published,
+        "manifest_label": active.label,
+        "claim": cbor2.loads(claim),
+        "actions": cbor2.loads(find(root, "c2pa.actions.v2").children[1].payload),
+        "leaf_cert": leaf,
         "signer_pubkey": point,
         "leaf_issuer": leaf.issuer.rfc4514_string(),
         "fields": {
@@ -119,6 +130,9 @@ def extract(signed_path: str) -> dict:
             "leaf_tbs_cert_len": len(leaf_tbs_cert),
             "leaf_cert_sig": leaf_cert_sig,
             "leaf_spki_offset": leaf_spki_offset,
+            "manifest_hash": hashlib.sha256(manifest).digest(),
+            "manifest": (manifest, MAX_MANIFEST),
+            "manifest_len": len(manifest),
         },
     }
 
