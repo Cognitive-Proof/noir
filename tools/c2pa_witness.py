@@ -60,21 +60,23 @@ def extract(signed_path: str) -> dict:
     except AssertionError as e:
         raise NoManifest(str(e)) from e
     root = parse_boxes(jumbf, 0, len(jumbf))
-    # active manifest = last manifest in the store; its superbox contents are
-    # what #2530's prunedManifest.hash commits to
+    # the active manifest is the last in the store: its superbox contents are
+    # what #2530's prunedManifest.hash commits to, and every lookup below is
+    # scoped to it, so an ingredient's manifest earlier in the store can't be
+    # mixed in
     active = root[0].children[-1]
     manifest = jumbf[active.offset + 8:active.end]
 
     def assertion_body(label):
         """Bytes the claim's hashed-uri covers: superbox minus its 8-byte header."""
-        box = find(root, label)
+        box = find([active], label)
         assert box is not None, f"assertion {label} not found"
         return jumbf[box.offset + 8:box.end]
 
     # --- claim + COSE_Sign1 -> Sig_structure (the exact bytes ES256 signs) ---
-    claim = find(root, "c2pa.claim.v2").children[1].payload
+    claim = find([active], "c2pa.claim.v2").children[1].payload
     protected, _unprotected, _payload, sig = cbor2.loads(
-        find(root, "c2pa.signature").children[1].payload).value
+        find([active], "c2pa.signature").children[1].payload).value
     tbs = cbor2.dumps(["Signature1", protected, b"", claim])
     assert tbs[15:15 + len(protected)] == protected
     assert tbs[19 + len(protected):] == claim
@@ -95,7 +97,7 @@ def extract(signed_path: str) -> dict:
     hash_data_ref = hashed_uri_bytes(HASH_DATA_URL, hashlib.sha256(hash_data).digest())
     claim_start = 19 + len(protected)
 
-    hd = cbor2.loads(find(root, "c2pa.hash.data").children[1].payload)
+    hd = cbor2.loads(find([active], "c2pa.hash.data").children[1].payload)
     asset_hash = hd["hash"]
 
     # --- the published image: manifest removed, so sha256(file) == asset_hash ---
@@ -107,7 +109,7 @@ def extract(signed_path: str) -> dict:
         "published": published,
         "manifest_label": active.label,
         "claim": cbor2.loads(claim),
-        "actions": cbor2.loads(find(root, "c2pa.actions.v2").children[1].payload),
+        "actions": cbor2.loads(find([active], "c2pa.actions.v2").children[1].payload),
         "leaf_cert": leaf,
         "signer_pubkey": point,
         "leaf_issuer": leaf.issuer.rfc4514_string(),

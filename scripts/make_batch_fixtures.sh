@@ -29,3 +29,18 @@ rm -rf $BATCH && mkdir -p $BATCH/images
   fi
   echo "  $name.jpg  (signer: $signer)"
 done
+
+# an edit of camera-a.jpg signed by camera-b: its store holds both manifests
+cat > $BATCH/manifests/edited.json <<'EOF'
+{
+  "alg": "es256",
+  "private_key": "../../certs/signer-camera-b.key",
+  "sign_cert": "../../certs/signer-camera-b.chain.pem",
+  "title": "edited.jpg",
+  "assertions": [{"label": "c2pa.actions.v2", "data": {"actions": [
+    {"action": "c2pa.color_adjustments", "softwareAgent": {"name": "Darkroom 4"}}]}}]
+}
+EOF
+(cd $BATCH/manifests && c2patool ../images/camera-a.jpg -m edited.json \
+  -o ../images/edited.jpg -f >/dev/null)
+echo "  edited.jpg  (signer: camera-b, parent: camera-a.jpg)"
