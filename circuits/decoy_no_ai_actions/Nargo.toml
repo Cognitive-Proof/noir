@@ -1,0 +1,6 @@
+[package]
+name = "decoy_no_ai_actions"
+type = "bin"
+authors = [""]
+
+[dependencies]
