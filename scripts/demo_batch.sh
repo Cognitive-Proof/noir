@@ -26,7 +26,7 @@ $PY - "$OUT/verdicts.json" <<'EOF'
 import json, sys
 got = {k: (v["trusted"], v["has_ai"]) for k, v in json.load(open(sys.argv[1])).items()}
 want = {"camera-a": (True, False), "camera-b": (True, False),
-        "ai-gen": (True, True), "ai-edit": (True, True),
+        "ai-gen": (True, True), "ai-edit": (True, True), "edited": (True, False),
         "rogue": (False, None), "plain": (False, None)}
 assert got == want, f"verdicts {got} != expected {want}"
 print("   verdicts match expected")

@@ -1,0 +1,8 @@
+{
+  "alg": "es256",
+  "private_key": "../../certs/signer-camera-b.key",
+  "sign_cert": "../../certs/signer-camera-b.chain.pem",
+  "title": "edited.jpg",
+  "assertions": [{"label": "c2pa.actions.v2", "data": {"actions": [
+    {"action": "c2pa.color_adjustments", "softwareAgent": {"name": "Darkroom 4"}}]}}]
+}
