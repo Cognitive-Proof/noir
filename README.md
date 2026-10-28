@@ -19,8 +19,8 @@ Requires `nargo` 1.0.0-beta.25, `bb` 5.0 and `c2patool` 0.27. The demo:
 
 1. Signs `fixtures/source.jpg` twice with an ES256 test cert: a camera capture (`digitalCapture`, with GPS/author EXIF) and an AI image (`trainedAlgorithmicMedia`).
 2. Extracts witnesses ([tools/make_witness.py](tools/make_witness.py)) and writes `published.jpg`, the image with its manifest removed.
-3. Proves the camera image, then verifies it with [tools/verify.py](tools/verify.py).
-4. Confirms these all fail: proving the AI image, verifying against a modified image, and verifying against a different signer.
+3. Proves the camera image, then verifies it with [tools/verify.py](tools/verify.py). The verifier passes in `EXPECTED_VK`, the verification key it built from the circuit itself, and never trusts a key shipped with a proof.
+4. Confirms these all fail: proving the AI image, verifying against a modified image, verifying against a different signer, and a "proof" that the AI image is clean from [a decoy circuit](circuits/decoy_no_ai_actions/src/main.nr) that checks nothing.
 
 Circuit: about 480k UltraHonk gates (2^19). Proving takes about 3 s on an M-series laptop, with about 1.2 GB peak memory.
 
