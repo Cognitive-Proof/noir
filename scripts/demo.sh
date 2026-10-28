@@ -28,7 +28,7 @@ prove() {  # $1 = fixture name (steps chained: set -e is off inside `if`)
 echo "== camera photo: prove"
 prove camera
 echo "== camera photo: verify"
-$PY tools/verify.py out/camera/published.jpg fixtures/certs/signer.pem out/camera
+$PY tools/verify.py out/camera/published.jpg fixtures/certs/signer.pem out/camera $VK_DIR/vk
 
 echo "== AI image: prove (must fail)"
 if prove ai 2>/dev/null; then echo "UNEXPECTED: AI image proved"; exit 1; fi
@@ -36,9 +36,20 @@ echo "   witness rejected, as expected"
 
 echo "== camera proof against a modified image (must fail)"
 cp out/camera/published.jpg out/tampered.jpg && printf 'x' >> out/tampered.jpg
-if $PY tools/verify.py out/tampered.jpg fixtures/certs/signer.pem out/camera; then exit 1; fi
+if $PY tools/verify.py out/tampered.jpg fixtures/certs/signer.pem out/camera $VK_DIR/vk; then exit 1; fi
 
 echo "== camera proof against a different signer (must fail)"
-if $PY tools/verify.py out/camera/published.jpg fixtures/certs/ca.pem out/camera; then exit 1; fi
+if $PY tools/verify.py out/camera/published.jpg fixtures/certs/ca.pem out/camera $VK_DIR/vk; then exit 1; fi
+
+echo "== AI image proven by a decoy circuit that checks nothing (must fail)"
+DECOY=circuits/decoy_no_ai_actions
+head -3 out/ai/Prover.toml > $DECOY/Prover.toml
+(cd $DECOY && nargo execute w >/dev/null) && rm $DECOY/Prover.toml
+rm -rf out/decoy && bb prove -b $DECOY/target/decoy_no_ai_actions.json -w $DECOY/target/w.gz \
+  -o out/decoy -t noir-recursive --write_vk >/dev/null 2>&1
+if $PY tools/verify.py out/ai/published.jpg fixtures/certs/signer.pem out/decoy $VK_DIR/vk; then exit 1; fi
+rm out/decoy/vk  # same proof without its own key: fails under the pinned key
+if out=$($PY tools/verify.py out/ai/published.jpg fixtures/certs/signer.pem out/decoy $VK_DIR/vk 2>&1); then exit 1; fi
+echo "$out" | head -1
 
 echo "== all checks passed"
