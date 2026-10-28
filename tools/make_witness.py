@@ -34,9 +34,9 @@ def hashed_uri_bytes(url: bytes, digest: bytes) -> bytes:
     return cbor2.dumps({"url": url.decode(), "hash": digest})
 
 
-def assertion_body(root, label: str) -> bytes:
+def assertion_body(active, label: str) -> bytes:
     """Bytes the claim's hashed-uri covers: superbox minus its 8-byte header."""
-    box = find(root, label)
+    box = find([active], label)
     assert box is not None, f"assertion {label} not found"
     return jumbf[box.offset + 8:box.end]
 
@@ -55,11 +55,14 @@ os.makedirs(out_dir, exist_ok=True)
 data = open(signed_path, "rb").read()
 jumbf = jumbf_from_jpeg(data)
 root = parse_boxes(jumbf, 0, len(jumbf))
+# the active manifest is the last in the store; every lookup below is scoped
+# to it, so an ingredient's manifest earlier in the store can't be mixed in
+active = root[0].children[-1]
 
 # --- claim + COSE_Sign1 -> Sig_structure (the exact bytes ES256 signs) ---
-claim = find(root, "c2pa.claim.v2").children[1].payload
+claim = find([active], "c2pa.claim.v2").children[1].payload
 protected, _unprotected, _payload, sig = cbor2.loads(
-    find(root, "c2pa.signature").children[1].payload).value
+    find([active], "c2pa.signature").children[1].payload).value
 tbs = cbor2.dumps(["Signature1", protected, b"", claim])
 assert tbs[15:15 + len(protected)] == protected
 assert tbs[19 + len(protected):] == claim
@@ -75,15 +78,15 @@ point = leaf.public_key().public_bytes(
 pub_x, pub_y = point[1:33], point[33:65]
 
 # --- assertions referenced from the claim ---
-actions = assertion_body(root, "c2pa.actions.v2")
-hash_data = assertion_body(root, "c2pa.hash.data")
+actions = assertion_body(active, "c2pa.actions.v2")
+hash_data = assertion_body(active, "c2pa.hash.data")
 actions_ref = hashed_uri_bytes(ACTIONS_URL, hashlib.sha256(actions).digest())
 hash_data_ref = hashed_uri_bytes(HASH_DATA_URL, hashlib.sha256(hash_data).digest())
 claim_start = 19 + len(protected)
 actions_ref_offset = tbs.index(actions_ref, claim_start)
 hash_data_ref_offset = tbs.index(hash_data_ref, claim_start)
 
-hd = cbor2.loads(find(root, "c2pa.hash.data").children[1].payload)
+hd = cbor2.loads(find([active], "c2pa.hash.data").children[1].payload)
 asset_hash = hd["hash"]
 asset_hash_offset = hash_data.index(b"\x64hash\x58\x20" + asset_hash)
 
