@@ -9,8 +9,10 @@ VK_DIR=out/vk
 # --- holder side -------------------------------------------------------------
 (cd fixtures && for m in camera ai; do
   c2patool source.jpg -m manifests/$m.json -o signed-$m.jpg -f >/dev/null
-done)
-for m in camera ai; do $PY tools/make_witness.py fixtures/signed-$m.jpg out/$m; done
+done
+# an edit of the camera photo: its store holds the parent manifest + the active one
+c2patool signed-camera.jpg -m manifests/edit.json -o signed-edited.jpg -f >/dev/null)
+for m in camera ai edited; do $PY tools/make_witness.py fixtures/signed-$m.jpg out/$m; done
 
 (cd $CIRCUIT && nargo compile)
 mkdir -p $VK_DIR
@@ -29,6 +31,10 @@ echo "== camera photo: prove"
 prove camera
 echo "== camera photo: verify"
 $PY tools/verify.py out/camera/published.jpg fixtures/certs/signer.pem out/camera $VK_DIR/vk
+
+echo "== edited photo, two manifests in its store: prove and verify the active one"
+prove edited
+$PY tools/verify.py out/edited/published.jpg fixtures/certs/signer.pem out/edited $VK_DIR/vk
 
 echo "== AI image: prove (must fail)"
 if prove ai 2>/dev/null; then echo "UNEXPECTED: AI image proved"; exit 1; fi
