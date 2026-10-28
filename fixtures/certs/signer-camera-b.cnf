@@ -1,0 +1,12 @@
+[req]
+distinguished_name=dn
+prompt=no
+[dn]
+CN=Signer camera-b
+O=Noir-C2PA Test
+[v3_leaf]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+extendedKeyUsage=emailProtection
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always

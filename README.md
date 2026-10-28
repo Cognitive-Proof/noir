@@ -1,4 +1,69 @@
-# Noir-C2PA: "no AI" selective disclosure
+# Noir-C2PA: selective disclosure over C2PA manifests
+
+Two circuits:
+
+| Circuit | Public inputs | Proves |
+|---|---|---|
+| [`trusted_ca_ai_flag`](#batch-trusted-ca--ai-flag) | CA key, image hash → **`has_ai`** | Signed by *some* cert under the trusted CA; reveals one bit: AI in actions or not |
+| [`no_ai_actions`](#single-image-no-ai-proof) | signer key, image hash | Signed by this exact key, and no AI in actions (AI images can't be proven) |
+
+## Batch: trusted CA + AI flag
+
+```bash
+scripts/demo_batch.sh
+```
+
+[`circuits/trusted_ca_ai_flag`](circuits/trusted_ca_ai_flag/src/main.nr) proves, for one image:
+
+> The image with SHA-256 `asset_hash` has a C2PA claim signed by a certificate that the CA `ca_pubkey` issued.
+> `has_ai` (public output) says whether that claim's `c2pa.actions` declares an AI-generated source type.
+
+The signer stays hidden, because the leaf certificate and its key are private witnesses. So does everything else in the manifest.
+
+**Batching is one proof per image.** All images share one verification key.
+- [tools/batch_prove.py](tools/batch_prove.py) (holder side) proves every image in a folder.
+- [tools/batch_verify.py](tools/batch_verify.py) (verifier side) checks each published image and prints a table:
+
+```
+image            trusted CA   AI in actions  detail
+ai-edit.jpg      yes          YES            proof verified
+ai-gen.jpg       yes          YES            proof verified
+camera-a.jpg     yes          no             proof verified
+camera-b.jpg     yes          no             proof verified
+plain.jpg        NO           -              no proof
+rogue.jpg        NO           -              no proof
+```
+
+Fixtures ([scripts/make_batch_fixtures.sh](scripts/make_batch_fixtures.sh)):
+- Three signers under the trusted CA (`camera-a`, `camera-b`, `ai-tool`).
+- A **rogue CA that copies the trusted CA's exact name** but has its own key.
+- `ai-edit` is a real camera capture, later edited with `compositeWithTrainedAlgorithmicMedia` (generative fill).
+- `plain` has no manifest.
+
+The demo also runs these attacks, and all of them are rejected:
+
+| Attack | Result |
+|---|---|
+| Modify a published image after proving | proof is for a different image |
+| Reuse a clean image's proof for an AI image | proof is for a different image |
+| Flip the public `has_ai` bit from 1 to 0 | proof invalid |
+| Prove the rogue image under the look-alike rogue CA | proof is for a different CA |
+
+**What the circuit adds on top of `no_ai_actions`:**
+1. ES256 check that the CA signed the leaf certificate (`sha256_var` over the certificate's signed portion).
+2. The leaf's P-256 key is read from the SubjectPublicKeyInfo (SPKI) at a prover-supplied offset, after checking the fixed 27-byte SPKI prefix.
+3. That key must verify the claim signature.
+4. The AI substring counts become the `has_ai` output instead of a failed assertion.
+
+Size: about 630k gates (2^20 circuit). Proving takes about 3–4 s per image; proof generation for the 6-image batch takes about 18 s in total.
+
+**Limitations beyond those listed for the single-image circuit:**
+- The CA must sign the leaf directly: no intermediate certificates.
+- Certificate validity dates, EKU and `CA:FALSE` aren't checked in the circuit.
+- The SPKI is found by pattern match. That's sound only if the CA never signs certificates with a second P-256 key elsewhere in the signed bytes.
+- `has_ai` is per image. The verifier learns which images contain AI, but not which signer or which actions.
+
+## Single image: "no AI" proof
 
 A Noir circuit that proves, about a C2PA-signed image:
 
