@@ -1,7 +1,11 @@
 """Verifier: check a composite whose ingredient manifests were pruned.
 
-  1. Standard C2PA validation of the final manifest (c2patool).
-  2. For every c2pa.ingredient.v3 with prunedManifest (#2530): its
+  1. Standard C2PA validation of the final manifest (c2patool), bound to the
+     bytes this script reads: the file must hold exactly one C2PA Manifest
+     Store, its active manifest must be the one c2patool reports, and the
+     claim signature and the claim's hashed URIs are re-checked here.
+  2. For every c2pa.ingredient.v3 the signed claim references and that has
+     prunedManifest (#2530): its
      relatedAssertions resolve and hash-match, and one of them is a
      c2pa.zero-knowledge-proof.ingredient (#318) whose
        - statement / verification key are the ones we trust,
@@ -26,6 +30,7 @@ import cbor2
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 
 sys.path.insert(0, os.path.dirname(__file__))
 from jumbf import jumbf_from_jpeg, parse_boxes  # noqa: E402
@@ -52,14 +57,21 @@ def active_manifest(path):
     return j, m
 
 
+def reject(reason):
+    print(f"final manifest: {reason}")
+    print("\nNOT ESTABLISHED")
+    sys.exit(1)
+
+
 # --- 1. the final manifest itself ---------------------------------------------
 r = subprocess.run(["c2patool", final_path], capture_output=True, text=True)
 try:
-    results = json.loads(r.stdout)["validation_results"]["activeManifest"]
+    report = json.loads(r.stdout)
+    results = report["validation_results"]["activeManifest"]
+    active_label = report["active_manifest"]
+    signer_serial = int(report["manifests"][active_label]["signature_info"]["cert_serial_number"])
 except (ValueError, KeyError):
-    print(f"final manifest unreadable: {r.stderr.strip().splitlines()[0] if r.stderr else 'no output'}")
-    print("\nNOT ESTABLISHED")
-    sys.exit(1)
+    reject(f"unreadable: {r.stderr.strip().splitlines()[0] if r.stderr else 'no output'}")
 failures = {r["code"] for r in results["failure"]} - ACCEPTED_FAILURES
 successes = {r["code"] for r in results["success"]}
 print(f"final manifest: claimSignature.validated={'claimSignature.validated' in successes}  "
@@ -67,10 +79,32 @@ print(f"final manifest: claimSignature.validated={'claimSignature.validated' in 
       f"other failures={sorted(failures) or 'none'}")
 final_ok = not failures and {"claimSignature.validated", "assertion.dataHash.match"} <= successes
 
-# --- 2. each pruned ingredient ------------------------------------------------
-jumbf, manifest = active_manifest(final_path)
-store = next(c for c in manifest.children if c.label == "c2pa.assertions")
+# bind what c2patool validated to the bytes inspected below
+try:
+    jumbf, manifest = active_manifest(final_path)
+except (AssertionError, ValueError) as e:
+    reject(str(e))
+if manifest.label != active_label:
+    reject(f"c2patool validated {active_label} but this file's store ends in {manifest.label}")
+parts = {c.label: c for c in manifest.children[1:]}
+store = parts["c2pa.assertions"]
 assertions = {a.label: a for a in store.children[1:]}
+claim_bytes = parts["c2pa.claim.v2"].children[-1].payload
+protected, _, _, cose_sig = cbor2.loads(parts["c2pa.signature"].children[-1].payload).value
+leaf = x509.load_der_x509_certificate(cbor2.loads(protected)[33][0])
+if leaf.serial_number != signer_serial:
+    reject("claim signed by a different certificate than c2patool reports")
+try:
+    leaf.public_key().verify(
+        encode_dss_signature(int.from_bytes(cose_sig[:32], "big"), int.from_bytes(cose_sig[32:], "big")),
+        cbor2.dumps(["Signature1", protected, b"", claim_bytes]), ec.ECDSA(hashes.SHA256()))
+except Exception:
+    reject("claim signature does not verify over the bytes inspected")
+claim = cbor2.loads(claim_bytes)
+signed_refs = {ref["url"].rsplit("/", 1)[-1]: ref["hash"]
+               for ref in claim["created_assertions"] + claim.get("gathered_assertions", [])}
+
+# --- 2. each pruned ingredient the signed claim references ---------------------
 
 
 def body(label):
@@ -140,7 +174,11 @@ def check_ingredient(label, ingr):
 entries = {}
 print(f"\n{'ingredient':22} {'prunedManifest.hash':20} result")
 all_ok = final_ok
-for label in sorted(l for l in assertions if l.startswith("c2pa.ingredient")):
+for label in sorted(l for l in signed_refs if l.startswith("c2pa.ingredient")):
+    if label not in assertions or hashlib.sha256(body(label)).digest() != signed_refs[label]:
+        all_ok = False
+        print(f"{label:22} {'-':20} ✗ ingredient assertion missing or not the one the claim signed")
+        continue
     ingr = content(label)
     h, verdict = check_ingredient(label, ingr)
     ok = verdict.startswith("PROVEN")
@@ -150,6 +188,9 @@ for label in sorted(l for l in assertions if l.startswith("c2pa.ingredient")):
     print(f"{ingr.get('dc:title', label):22} {(h.hex()[:16] + '…') if h else '-':20} "
           f"{'✓' if ok else '✗'} {verdict}")
 
+if not entries:  # nothing was proven; don't report success vacuously
+    all_ok = False
+    print("no pruned ingredients found")
 print("\nALL PRUNED INGREDIENTS PROVEN AI-FREE" if all_ok else "\nNOT ESTABLISHED")
 
 # --- 3. later disclosure -------------------------------------------------------

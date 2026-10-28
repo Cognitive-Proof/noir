@@ -3,8 +3,18 @@ import struct
 from dataclasses import dataclass, field
 
 
+# Description-box content type of a C2PA Manifest Store ("c2pa" UUID)
+C2PA_STORE_TYPE = b"c2pa" + bytes.fromhex("00110010800000aa00389b71")
+
+
 def jumbf_from_jpeg(data: bytes) -> bytes:
-    """Reassemble the C2PA JUMBF superbox from JPEG APP11 segments."""
+    """Reassemble the C2PA Manifest Store from JPEG APP11 segments.
+
+    APP11 segments are grouped by instance number (En); only a group whose
+    superbox is a C2PA Manifest Store counts. Other JUMBF is ignored, and a
+    file with more than one C2PA store is rejected rather than guessing which
+    one a validator used.
+    """
     pos, chunks = 2, {}
     assert data[:2] == b"\xff\xd8", "not a JPEG"
     while pos < len(data):
@@ -16,10 +26,17 @@ def jumbf_from_jpeg(data: bytes) -> bytes:
         if marker == 0xFFDA:  # start of scan
             break
         pos += 2 + length
-    assert chunks, "no JUMBF found"
-    parts = sorted(next(iter(chunks.values())))
-    # continuation segments repeat the 8-byte LBox/TBox header
-    return parts[0][1] + b"".join(p[8:] for _, p in parts[1:])
+    stores = []
+    for parts in chunks.values():
+        parts = sorted(parts)
+        # continuation segments repeat the 8-byte LBox/TBox header
+        jumbf = parts[0][1] + b"".join(p[8:] for _, p in parts[1:])
+        if jumbf[4:8] == b"jumb" and jumbf[12:16] == b"jumd" and jumbf[16:32] == C2PA_STORE_TYPE:
+            stores.append(jumbf)
+    assert stores, "no C2PA Manifest Store found"
+    if len(stores) > 1:
+        raise ValueError(f"{len(stores)} C2PA Manifest Stores in one file")
+    return stores[0]
 
 
 @dataclass

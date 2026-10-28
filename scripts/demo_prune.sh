@@ -17,7 +17,16 @@ if [ -z "${SKIP_PROVE:-}" ]; then
   $PY tools/prune_prove.py $OUT/proofs $INGREDIENTS $ING/ai-ingr.jpg
   grep -q '"ai-ingr": "not-provable"' $OUT/proofs/status.json
 fi
-VK=$OUT/proofs/vk
+
+echo "== verifier: build its own verification key from the circuit (never the prover's)"
+(cd circuits/pruned_manifest_no_ai && nargo compile >/dev/null 2>&1)
+bb write_vk -b circuits/pruned_manifest_no_ai/target/pruned_manifest_no_ai.json \
+  -o out/prune-verifier -t noir-recursive >/dev/null 2>&1
+VK=out/prune-verifier/vk
+# a key for some other circuit, for the own-vk attack below
+(cd circuits/no_ai_actions && nargo compile >/dev/null 2>&1)
+bb write_vk -b circuits/no_ai_actions/target/no_ai_actions.json \
+  -o $OUT/decoy-vk -t noir-recursive >/dev/null 2>&1
 
 echo "== pruner: build the composite with pruned ingredients"
 $PY tools/prune_build.py $OUT/final.jpg $OUT/proofs $INGREDIENTS
@@ -33,19 +42,31 @@ echo "== verifier"
 $PY tools/prune_verify.py $OUT/final.jpg $CA $VK --reveal $ING/ingr-2.jpg $ING/ai-ingr.jpg
 
 # --- a dishonest pruner signs a valid final manifest; the proofs must catch it
-attack() {  # $1 = attack name, $2 = expected verdict text
-  $PY tools/prune_build.py $OUT/attack-$1.jpg $OUT/proofs $INGREDIENTS --attack $1 >/dev/null
-  local out
-  if out=$($PY tools/prune_verify.py $OUT/attack-$1.jpg $CA $VK); then
-    echo "UNEXPECTED: attack $1 verified"; exit 1
+attack() {  # $1 = attack name, $2 = expected verdict text, $3.. = extra prune_build args
+  local name=$1 want=$2 out; shift 2
+  $PY tools/prune_build.py $OUT/attack-$name.jpg $OUT/proofs $INGREDIENTS --attack $name "$@" >/dev/null
+  if out=$($PY tools/prune_verify.py $OUT/attack-$name.jpg $CA $VK); then
+    echo "UNEXPECTED: attack $name verified"; exit 1
   fi
-  grep -q "$2" <<<"$out" || { echo "UNEXPECTED verdict for $1:"; echo "$out"; exit 1; }
-  echo "   $1: rejected ($2)"
+  grep -q "$want" <<<"$out" || { echo "UNEXPECTED verdict for $name:"; echo "$out"; exit 1; }
+  echo "   $name: rejected ($want)"
 }
 echo "== dishonest pruner"
 attack swap-proofs "different manifest than prunedManifest.hash"
 attack wrong-cert "certificate's key is not the proven signer key"
-attack own-vk "verification key is not the trusted circuit's"
+attack own-vk "verification key is not the trusted circuit's" --decoy-vk $OUT/decoy-vk/vk
+attack drop-proof "no zero-knowledge proof attached"
+# drop a proof and hide a (non-C2PA-typed) copy of the honest store ahead of
+# the signed one: the verifier must read the store c2patool validated
+attack decoy-store "no zero-knowledge proof attached" --decoy-store $OUT/final.jpg
+
+echo "== a second C2PA store in the file"
+$PY tools/inject_store.py $OUT/final.jpg $OUT/attack-drop-proof.jpg $OUT/two-stores.jpg
+if $PY tools/prune_verify.py $OUT/two-stores.jpg $CA $VK >/dev/null; then echo "UNEXPECTED"; exit 1; fi
+echo "   two C2PA stores: rejected"
+
+echo "== a clean actions witness for a manifest whose stored actions declare AI"
+$PY tools/test_tampered_actions.py $ING/ingr-1.jpg
 
 echo "== tampering after signing"
 cp $OUT/final.jpg $OUT/tampered.jpg

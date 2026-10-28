@@ -6,9 +6,10 @@
 //    c2pa.actions assertion declares no AI-generated digitalSourceType."
 //
 // The manifest itself (assertions, thumbnail, EXIF/GPS, claim, certificate
-// chain) stays private. The claim and signature are located by walking the
-// manifest's own JUMBF box structure, so bytes hidden elsewhere in the
-// manifest (e.g. inside the thumbnail) can't stand in for them.
+// chain) stays private. The claim, signature and actions assertion are
+// located by walking the manifest's own JUMBF box structure, so bytes hidden
+// elsewhere in the manifest (e.g. inside the thumbnail) can't stand in for
+// them, and the actions checked are the ones stored in the committed manifest.
 use sha256::sha256_var;
 
 // Largest manifest the circuit accepts (thumbnail included)
@@ -17,6 +18,8 @@ global MAX_TBS: u32 = 2112;
 global MAX_PROTECTED: u32 = 1280;
 global MAX_CLAIM: u32 = 768;
 global MAX_ACTIONS: u32 = 512;
+// Most assertion boxes walked past to reach the actions assertion
+global MAX_ASSERTIONS: u32 = 16;
 
 // COSE Sig_structure prefix: array(4), tstr(10) "Signature1"
 global SIG1_PREFIX: [u8; 12] = [0x84, 0x6a, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x74, 0x75, 0x72, 0x65, 0x31];
@@ -31,6 +34,7 @@ global CBOR: [u8; 4] = "cbor".as_bytes();
 global LABEL_ASSERTIONS: [u8; 16] = "c2pa.assertions\0".as_bytes();
 global LABEL_CLAIM: [u8; 14] = "c2pa.claim.v2\0".as_bytes();
 global LABEL_SIGNATURE: [u8; 15] = "c2pa.signature\0".as_bytes();
+global LABEL_ACTIONS: [u8; 16] = "c2pa.actions.v2\0".as_bytes();
 // superbox header (8) + jumd header (8) + content-type UUID (16) + toggles (1)
 global LABEL_AT: u32 = 33;
 
@@ -73,6 +77,7 @@ fn main(
     actions: [u8; MAX_ACTIONS],
     actions_len: u32,
     actions_ref_offset: u32,
+    actions_index: u32,
 ) {
     // 1. The commitment: prunedManifest.hash is SHA-256 over the manifest
     //    superbox contents (everything after its 8-byte header).
@@ -131,7 +136,11 @@ fn main(
     // 6. No ancestors: the claim references no ingredient assertion.
     assert(count_in_range(tbs, claim_start, tbs_len, INGREDIENT_PREFIX) == 0);
 
-    // 7. The claim references exactly one actions assertion, by hash ...
+    // 7. The actions witness is the c2pa.actions.v2 box stored in this
+    //    manifest: the actions_index-th child of c2pa.assertions ...
+    assert_stored_actions(manifest, assertions_at, claim_box_at, actions_index, actions, actions_len);
+
+    // ... and the claim references exactly one actions assertion, by hash ...
     let actions_hash = sha256_var(actions, actions_len);
     assert_hashed_uri(tbs, tbs_len, claim_start, actions_ref_offset, ACTIONS_URL, actions_hash);
     assert(count_in_range(tbs, claim_start, tbs_len, ACTIONS_PREFIX) == 1);
@@ -149,6 +158,37 @@ fn superbox_len<let L: u32>(manifest: [u8; MAX_MANIFEST], at: u32, label: [u8; L
     assert_bytes_at(manifest, at + 12, JUMD);
     assert_bytes_at(manifest, at + LABEL_AT, label);
     be32_at(manifest, at)
+}
+
+/// The `index`-th assertion superbox in the store at `store_at` (offsets come
+/// only from box lengths, from the store's first child) is c2pa.actions.v2,
+/// and `actions` is exactly its contents: what the claim's hashed URI covers.
+fn assert_stored_actions(
+    manifest: [u8; MAX_MANIFEST],
+    store_at: u32,
+    store_end: u32,
+    index: u32,
+    actions: [u8; MAX_ACTIONS],
+    actions_len: u32,
+) {
+    assert(index < MAX_ASSERTIONS);
+    let mut at = store_at + 8 + be32_at(manifest, store_at + 8); // skip the store's jumd
+    for k in 0..MAX_ASSERTIONS {
+        if k < index {
+            assert_bytes_at(manifest, at + 4, JUMB);
+            at += be32_at(manifest, at);
+            assert(at < store_end);
+        }
+    }
+    let box_len = superbox_len(manifest, at, LABEL_ACTIONS);
+    assert(at + box_len <= store_end);
+    assert(actions_len == box_len - 8);
+    assert(actions_len <= MAX_ACTIONS);
+    for i in 0..MAX_ACTIONS {
+        if i < actions_len {
+            assert(actions[i] == manifest[at + 8 + i]);
+        }
+    }
 }
 
 /// (offset, length) of the payload of the `cbor` box that follows the

@@ -133,6 +133,10 @@ def extract(signed_path: str) -> dict:
             "manifest_hash": hashlib.sha256(manifest).digest(),
             "manifest": (manifest, MAX_MANIFEST),
             "manifest_len": len(manifest),
+            # position of c2pa.actions.v2 among the assertion store's superboxes
+            "actions_index": [c.label for c in next(
+                b for b in active.children if b.label == "c2pa.assertions").children[1:]
+            ].index("c2pa.actions.v2"),
         },
     }
 

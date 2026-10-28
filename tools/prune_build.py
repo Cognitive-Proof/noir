@@ -10,10 +10,14 @@ For each ingredient the final manifest gets (c2pa-org/specs-core#2530):
 The ingredient manifests themselves are not included.
 
 usage: prune_build.py OUT.jpg PROOFS_DIR INGREDIENT.jpg [INGREDIENT.jpg ...]
-         [--attack swap-proofs|wrong-cert|own-vk]
+         [--attack swap-proofs|wrong-cert|own-vk|drop-proof|decoy-store]
+         [--decoy-vk VK] [--decoy-store HONEST_FINAL.jpg]
 
 --attack builds a final manifest the way a dishonest pruner might; it is
-still validly signed, and the verifier must catch it.
+still validly signed, and the verifier must catch it. own-vk needs
+--decoy-vk, a verification key for some other circuit. decoy-store drops
+ingredient 1's proof and hides a retyped copy of an honest final store
+(--decoy-store) ahead of the signed one, inside the signed image bytes.
 """
 import hashlib
 import json
@@ -26,6 +30,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(__file__))
 from c2pa_builder import Assertion, sign_jpeg  # noqa: E402
 from c2pa_witness import extract  # noqa: E402
+from inject_store import copied_store  # noqa: E402
 from cryptography import x509  # noqa: E402
 from cryptography.hazmat.primitives import serialization  # noqa: E402
 from cryptography.x509.oid import NameOID  # noqa: E402
@@ -74,11 +79,20 @@ def signals(actions):
     return inceptions, transformations
 
 
-args = [a for a in sys.argv[1:] if not a.startswith("--")]
-attack = sys.argv[sys.argv.index("--attack") + 1] if "--attack" in sys.argv else None
-if attack:
-    args.remove(attack)
-out_path, proofs_dir, ingredient_paths = args[0], args[1], args[2:]
+argv = sys.argv[1:]
+options = {}
+for name in ("--attack", "--decoy-vk", "--decoy-store"):
+    if name in argv:
+        i = argv.index(name)
+        options[name] = argv[i + 1]
+        del argv[i:i + 2]
+attack, decoy_vk = options.get("--attack"), options.get("--decoy-vk")
+if attack == "own-vk" and not decoy_vk:
+    sys.exit("--attack own-vk needs --decoy-vk")
+if attack == "decoy-store" and "--decoy-store" not in options:
+    sys.exit("--attack decoy-store needs --decoy-store")
+drop_proof = attack in ("drop-proof", "decoy-store")
+out_path, proofs_dir, ingredient_paths = argv[0], argv[1], argv[2:]
 
 statement_spec = {"url": REPO_URL + CIRCUIT_SRC, "alg": "sha256",
                   "hash": hashlib.sha256(open(os.path.join(ROOT, CIRCUIT_SRC), "rb").read()).digest()}
@@ -106,7 +120,7 @@ for i, (path, name) in enumerate(zip(ingredient_paths, names)):
         cert_der = x509.load_pem_x509_certificate(other).public_bytes(serialization.Encoding.DER)
     proof_vk = vk
     if attack == "own-vk" and i == 0:  # verification key for some other circuit
-        proof_vk = open(os.path.join(ROOT, "out/batch/proofs/vk"), "rb").read()
+        proof_vk = open(decoy_vk, "rb").read()
 
     s = suffix(i)
     ingredient_label = f"c2pa.ingredient.v3{s}"
@@ -152,10 +166,13 @@ for i, (path, name) in enumerate(zip(ingredient_paths, names)):
         "digitalSourceType": created_dst,
         "prunedManifest": {"alg": "sha256", "hash": f["manifest_hash"]},
         "validationResults": {"activeManifest": validation_results(path)},
-        "relatedAssertions": [zkp.ref(), sig_ingredient.ref(), sig_ancestors.ref()],
+        "relatedAssertions": [zkp.ref(), sig_ingredient.ref(), sig_ancestors.ref()]
+        if not (drop_proof and i == 0)  # this ingredient gets no proof
+        else [sig_ingredient.ref(), sig_ancestors.ref()],
     })
     created.append(ingredient)
-    gathered += [zkp, sig_ingredient, sig_ancestors]
+    gathered += [sig_ingredient, sig_ancestors] if drop_proof and i == 0 \
+        else [zkp, sig_ingredient, sig_ancestors]
     ingredient_refs.append(ingredient.ref())
     print(f"{name:8} pruned  H={f['manifest_hash'].hex()[:16]}…  signer={cert.subject.rfc4514_string()}")
 
@@ -175,9 +192,16 @@ for im in srcs:
 unsigned = out_path[:-4] + ".unsigned.jpg"
 canvas.save(unsigned, quality=90)
 
-jpeg = sign_jpeg(open(unsigned, "rb").read(), [actions] + created, gathered,
+jpeg = open(unsigned, "rb").read()
+insert_at = None
+if attack == "decoy-store":  # retyped honest store first; the signed store goes after it
+    from c2pa_builder import _insert_at
+    at = _insert_at(jpeg)
+    decoy = copied_store(open(options["--decoy-store"], "rb").read(), not_c2pa=True)
+    jpeg, insert_at = jpeg[:at] + decoy + jpeg[at:], at + len(decoy)
+jpeg = sign_jpeg(jpeg, [actions] + created, gathered,
                  f"{EDITOR}.key", f"{EDITOR}.chain.pem", os.path.basename(out_path),
-                 {"name": "noir-c2pa-prune", "version": "0.1.0"})
+                 {"name": "noir-c2pa-prune", "version": "0.1.0"}, insert_at)
 os.remove(unsigned)
 open(out_path, "wb").write(jpeg)
 print(f"-> {out_path} ({len(jpeg)} bytes, {len(ingredient_paths)} pruned ingredients"

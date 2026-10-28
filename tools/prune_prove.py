@@ -24,7 +24,7 @@ TARGET = ["-t", "noir-recursive"]
 INPUTS = [
     "manifest_hash", "signer_pubkey_x", "signer_pubkey_y",
     "manifest", "manifest_len", "signature", "tbs_len", "protected_len",
-    "actions", "actions_len", "actions_ref_offset",
+    "actions", "actions_len", "actions_ref_offset", "actions_index",
 ]
 
 

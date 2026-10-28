@@ -79,7 +79,7 @@ def _insert_at(jpeg: bytes) -> int:
 
 
 def sign_jpeg(jpeg: bytes, created: list, gathered: list, key_path: str, chain_path: str,
-              title: str, generator: dict) -> bytes:
+              title: str, generator: dict, insert_at: int = None) -> bytes:
     """Embed a signed manifest made of `created` + `gathered` Assertions (plus a
     c2pa.hash.data that this function adds) into `jpeg`."""
     key = serialization.load_pem_private_key(open(key_path, "rb").read(), None)
@@ -87,7 +87,8 @@ def sign_jpeg(jpeg: bytes, created: list, gathered: list, key_path: str, chain_p
              for c in x509.load_pem_x509_certificates(open(chain_path, "rb").read())]
     manifest_label = f"urn:c2pa:{uuid.uuid4()}"
     instance_id = f"xmp:iid:{uuid.uuid4()}"
-    insert_at = _insert_at(jpeg)
+    if insert_at is None:
+        insert_at = _insert_at(jpeg)
     asset_hash = hashlib.sha256(jpeg).digest()  # == hash of signed file minus the exclusion
     hash_data = Assertion("c2pa.hash.data", None)
     protected = cbor2.dumps({1: -7, 33: chain})
